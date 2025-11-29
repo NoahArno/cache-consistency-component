@@ -1,19 +1,113 @@
-# Cache-Consistency-Component
+# Cache Consistency Spring Boot Starter
 
-架构：JDK21
+缓存一致性Spring Boot Starter组件，用于解决分布式系统中的缓存一致性问题。
 
-背景：
-系统为了提高整体的性能，一般都会对一些经常使用但不经常变动的数据进行缓存。随着系统越来越大，缓存和数据之间的关联性缺少维护：我更改了某张表的数据，但是不知道这些数据被哪些缓存依赖，就可能造成缓存漏删，进而导致较长时间的缓存不一致。为了解决这个问题，需要对这些缓存和数据的依赖关系进行维护。
+## 功能特性
 
-原理：
+- 基于Redis ZSet实现缓存与数据表的依赖关系管理
+- 自动版本控制，确保缓存数据的新鲜度
+- 支持新鲜度权重配置，优先清理高优先级缓存
+- 通过注解方式简化使用
+- 异步清理机制，不影响主业务流程
+
+## 设计原理
+
 1. 通过 Redis 中的 ZSET 维护缓存和数据表的依赖关系，ZSET 中的 key 为具体的表名，value 为具体的业务名称，SCORE 为当前业务的新鲜度（新鲜度越高的，在清除缓存时优先）
-2. 当数据表更新的时候，就能知道当前数据表被哪些业务依赖了。
-3. 为每个表都维护一个版本号，比如 ZSET 中的 Key 就为"表名:version"。当数据表更新的时候，将版本号+1，然后将旧的 Key 中的 Value 列表（具体的业务）进行批量删除，优先删除新鲜度要求高的业务。此时如果有新的数据需要被缓存，就会先读取对应表的最新版本号，然后往 ZSET 中添加新的业务依赖关系。
+2. 当数据表更新的时候，就能知道当前数据表被哪些业务依赖了
+3. 为每个表都维护一个版本号，比如 ZSET 中的 Key 就为"表名:version"。当数据表更新的时候，将版本号+1，然后将旧的 Key 中的 Value 列表（具体的业务）进行批量删除，优先删除新鲜度要求高的业务。此时如果有新的数据需要被缓存，就会先读取对应表的最新版本号，然后往 ZSET 中添加新的业务依赖关系
 
+## 使用方法
 
-步骤：
-1. 假设菜单业务 Menu 依赖表t_user和表t_menu，权限业务 Auth 依赖表 t_user、t_menu 和 t_contr
-2. 当 Menu 业务发现 Redis 中没有缓存的时候，会从数据库查询数据在内存根据业务情况进行组装，然后将处理后的结果放到缓存中，同时判断 t_user 和 t_menu 对应的最新版本号，假设分别为 1 和 2，那么就会执行 ZADD t_user:1 Menu 和 ZADD t_menu:2 Menu。
-3. 当 Auth 业务发现 Redis 中没有缓存的时候，会从数据库查询数据在内存根据业务情况进行组装，然后将处理后的结果放到缓存中，同时判断 t_user、t_menu 和 t_contr 对应的最新版本号，假设分别为 1、2 和 3，那么就会执行 ZADD t_user:1 Auth、ZADD t_menu:2 Auth 和 ZADD t_contr:3 Auth。
-4. 当 t_user 表更新的时候，会先将版本号+1，此时版本为 2，然后执行 ZMEMBERS t_user:1，获取到旧版本维护的所有业务缓存依赖关系，并且在后台异步删除这些业务缓存，新鲜度要求高的业务会优先删除。
-5. 当 Menu 业务再次被触发的时候，由于之前的缓存已经被清除，就会从数据库查询数据在内存根据业务情况进行组装，然后将处理后的结果放到缓存中，同时判断 t_user 和 t_menu 对应的最新版本号，此时为 2 和 2，那么就会执行 ZADD t_user:2 Menu 和 ZADD t_menu:2 Menu。
+### 1. 添加依赖
+
+```xml
+<dependency>
+    <groupId>top.noaharno</groupId>
+    <artifactId>cache-consistency-spring-boot-starter</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
+```
+
+### 2. 配置文件
+
+```yaml
+cache:
+  consistency:
+    enabled: true
+    version-key-prefix: "version:"
+    dependency-key-prefix: "dependency:"
+    clean-thread-pool-size: 10
+    clean-batch-size: 100
+
+spring:
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 2000ms
+```
+
+### 3. 在业务方法上添加注解
+
+```java
+@Service
+public class MenuService {
+    
+    @CacheConsistency(businessName = "menu", tables = {"t_user", "t_menu"}, freshness = 5)
+    public List<Menu> getMenuList() {
+        // 业务逻辑
+        return menuList;
+    }
+}
+```
+
+### 4. 表更新时触发缓存清理
+
+```java
+@Service
+public class UserService {
+    
+    @Autowired
+    private TableUpdateEventPublisher eventPublisher;
+    
+    public void updateUser(User user) {
+        // 更新用户表
+        userMapper.update(user);
+        
+        // 发布表更新事件
+        eventPublisher.publishTableUpdateEvent("t_user");
+    }
+}
+```
+
+## 配置项说明
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| cache.consistency.enabled | true | 是否启用缓存一致性功能 |
+| cache.consistency.version-key-prefix | "version:" | 版本key的前缀 |
+| cache.consistency.dependency-key-prefix | "dependency:" | 依赖关系key的前缀 |
+| cache.consistency.clean-thread-pool-size | 10 | 异步清理缓存的线程池大小 |
+| cache.consistency.clean-batch-size | 100 | 缓存清理的批处理大小 |
+
+## 核心组件
+
+- `@CacheConsistency`: 注解，用于标记需要参与缓存一致性管理的业务方法
+- `CacheVersionService`: 缓存版本服务，负责管理各个表的版本号
+- `CacheDependencyService`: 缓存依赖服务，负责管理缓存与数据表之间的依赖关系
+- `TableUpdateListener`: 表更新监听器，处理表数据变更时的缓存清理逻辑
+- `TableUpdateEventPublisher`: 表更新事件发布器，用于发布表更新事件
+
+## 工作流程
+
+1. 业务方法执行时，通过@CacheConsistency注解建立缓存依赖关系
+2. 当数据表更新时，调用TableUpdateEventPublisher发布事件
+3. TableUpdateListener监听到事件后，获取旧版本的所有依赖业务
+4. 异步清理这些业务的缓存
+5. 清理旧版本的依赖关系
+
+## 注意事项
+
+1. 需要配置Redis连接信息
+2. 需要启用Spring的异步处理功能(@EnableAsync)
+3. 业务方法需要是Spring管理的Bean

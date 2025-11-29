@@ -1,4 +1,4 @@
-package com.example.cacheconsistency.constant;
+package top.noaharno.cacheconsistency.constant;
 
 import lombok.Getter;
 

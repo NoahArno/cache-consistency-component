@@ -9,6 +9,7 @@
 - 支持新鲜度权重配置，优先清理高优先级缓存
 - 通过注解方式简化使用
 - 异步清理机制，不影响主业务流程
+- 提供增强版缓存工具类，支持特殊业务操作
 
 ## 设计原理
 
@@ -34,8 +35,8 @@
 cache:
   consistency:
     enabled: true
-    version-key-prefix: "version:"
-    dependency-key-prefix: "dependency:"
+    version-key-prefix: "cache:version:"
+    dependency-key-prefix: "cache:dependency:"
     clean-thread-pool-size: 10
     clean-batch-size: 100
 
@@ -80,13 +81,48 @@ public class UserService {
 }
 ```
 
+### 5. 使用增强版缓存工具类
+
+```java
+@Service
+public class BusinessService {
+    
+    @Autowired
+    private EnhancedCacheUtil enhancedCacheUtil;
+    
+    public String getUserInfo(String userId) {
+        String cacheKey = "user:info:" + userId;
+        
+        // 从缓存中获取数据
+        String cachedData = enhancedCacheUtil.getStringRedisTemplate().opsForValue().get(cacheKey);
+        if (cachedData != null && !cachedData.isEmpty()) {
+            return cachedData;
+        }
+
+        // 模拟从数据库获取数据
+        String userInfo = simulateDatabaseQuery(userId);
+        
+        // 使用增强版缓存工具类设置缓存并执行特殊业务操作
+        enhancedCacheUtil.setWithBusinessOperation(
+            cacheKey, 
+            userInfo, 
+            "user-service",  // 业务ID
+            "user",          // 表名
+            2                // 新鲜度权重
+        );
+        
+        return userInfo;
+    }
+}
+```
+
 ## 配置项说明
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | cache.consistency.enabled | true | 是否启用缓存一致性功能 |
-| cache.consistency.version-key-prefix | "version:" | 版本key的前缀 |
-| cache.consistency.dependency-key-prefix | "dependency:" | 依赖关系key的前缀 |
+| cache.consistency.version-key-prefix | "cache:version:" | 版本key的前缀 |
+| cache.consistency.dependency-key-prefix | "cache:dependency:" | 依赖关系key的前缀 |
 | cache.consistency.clean-thread-pool-size | 10 | 异步清理缓存的线程池大小 |
 | cache.consistency.clean-batch-size | 100 | 缓存清理的批处理大小 |
 
@@ -97,6 +133,7 @@ public class UserService {
 - `CacheDependencyService`: 缓存依赖服务，负责管理缓存与数据表之间的依赖关系
 - `TableUpdateListener`: 表更新监听器，处理表数据变更时的缓存清理逻辑
 - `TableUpdateEventPublisher`: 表更新事件发布器，用于发布表更新事件
+- `EnhancedCacheUtil`: 增强版缓存工具类，封装StringRedisTemplate并提供特殊业务操作功能
 
 ## 工作流程
 

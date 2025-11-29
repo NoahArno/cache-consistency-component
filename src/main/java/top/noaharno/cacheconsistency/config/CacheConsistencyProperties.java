@@ -1,4 +1,4 @@
-package com.example.cacheconsistency.config;
+package top.noaharno.cacheconsistency.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

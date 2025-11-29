@@ -1,4 +1,4 @@
-package com.example.cacheconsistency.util;
+package top.noaharno.cacheconsistency.util;
 
 /**
  * 缓存工具类

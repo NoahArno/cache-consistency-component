@@ -1,8 +1,8 @@
-package com.example.cacheconsistency.interceptor;
+package top.noaharno.cacheconsistency.interceptor;
 
-import com.example.cacheconsistency.config.CacheConsistencyProperties;
-import com.example.cacheconsistency.constant.CacheLevelEnum;
-import com.example.cacheconsistency.util.SqlAnalysisUtil;
+import top.noaharno.cacheconsistency.config.CacheConsistencyProperties;
+import top.noaharno.cacheconsistency.constant.CacheLevelEnum;
+import top.noaharno.cacheconsistency.util.SqlAnalysisUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.ibatis.javassist.bytecode.analysis.Executor;
 import org.apache.ibatis.mapping.MappedStatement;

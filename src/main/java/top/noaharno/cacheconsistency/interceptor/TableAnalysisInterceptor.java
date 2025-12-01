@@ -1,17 +1,17 @@
 package top.noaharno.cacheconsistency.interceptor;
 
-import top.noaharno.cacheconsistency.config.CacheConsistencyProperties;
-import top.noaharno.cacheconsistency.constant.CacheLevelEnum;
-import top.noaharno.cacheconsistency.service.CacheDependencyService;
-import top.noaharno.cacheconsistency.util.SqlAnalysisUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.ibatis.javassist.bytecode.analysis.Executor;
+import org.apache.ibatis.executor.Executor;
 import org.apache.ibatis.mapping.MappedStatement;
 import org.apache.ibatis.plugin.Interceptor;
 import org.apache.ibatis.plugin.Intercepts;
 import org.apache.ibatis.plugin.Invocation;
 import org.apache.ibatis.plugin.Signature;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import top.noaharno.cacheconsistency.config.CacheConsistencyProperties;
+import top.noaharno.cacheconsistency.constant.CacheLevelEnum;
+import top.noaharno.cacheconsistency.service.CacheDependencyService;
+import top.noaharno.cacheconsistency.util.SqlAnalysisUtil;
 
 import java.util.*;
 import java.util.concurrent.*;

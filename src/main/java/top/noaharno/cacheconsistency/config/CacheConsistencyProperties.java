@@ -32,11 +32,6 @@ public class CacheConsistencyProperties {
      */
     private int cleanThreadPoolSize = 10;
 
-    /**
-     * 缓存清理的批处理大小
-     */
-    private int cleanBatchSize = 100;
-
     // Getters and Setters
 
     public boolean isEnabled() {
@@ -69,13 +64,5 @@ public class CacheConsistencyProperties {
 
     public void setCleanThreadPoolSize(int cleanThreadPoolSize) {
         this.cleanThreadPoolSize = cleanThreadPoolSize;
-    }
-
-    public int getCleanBatchSize() {
-        return cleanBatchSize;
-    }
-
-    public void setCleanBatchSize(int cleanBatchSize) {
-        this.cleanBatchSize = cleanBatchSize;
     }
 }

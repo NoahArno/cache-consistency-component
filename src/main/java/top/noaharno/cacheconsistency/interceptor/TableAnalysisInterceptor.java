@@ -13,17 +13,15 @@ import org.apache.ibatis.plugin.Invocation;
 import org.apache.ibatis.plugin.Signature;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.util.Properties;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 表分析拦截器
  * <p/>
  * 拦截所有执行的 UPDATE SQL，解析出它的表名，并且清空对应的 Redis 缓存依赖关系
  */
-
 @Intercepts({
         @Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class})
 })
@@ -34,10 +32,23 @@ public class TableAnalysisInterceptor implements Interceptor {
 
     private final CacheDependencyService cacheDependencyService;
 
+    /**
+     * 用于控制缓存删除任务的线程池
+     */
+    private final ScheduledExecutorService scheduledExecutorService;
+
+    /**
+     * 用于跟踪正在处理的表删除任务
+     */
+    private final Map<String, ScheduledFuture<?>> pendingCleanupTasks = new ConcurrentHashMap<>();
+
     public TableAnalysisInterceptor(StringRedisTemplate redisTemplate,
-                                    CacheDependencyService cacheDependencyService) {
+                                    CacheDependencyService cacheDependencyService,
+                                    CacheConsistencyProperties properties) {
         this.redisTemplate = redisTemplate;
         this.cacheDependencyService = cacheDependencyService;
+        // 初始化线程池
+        this.scheduledExecutorService = Executors.newScheduledThreadPool(properties.getCleanThreadPoolSize());
     }
 
     @Override
@@ -60,39 +71,110 @@ public class TableAnalysisInterceptor implements Interceptor {
      */
     private void cleanCacheDependency(Set<String> tableSet) {
         try {
-            // 清空缓存依赖关系
+            // 创建两个任务列表：一个是立即执行的（秒级新鲜度），另一个是延迟执行的（其他级别）
+            List<CacheCleanupTask> immediateTasks = new ArrayList<>();
+            PriorityQueue<CacheCleanupTask> delayedTasks = new PriorityQueue<>();
+
+            // 为每个表创建清理任务
             for (String table : tableSet) {
-                CompletableFuture.runAsync(() -> {
-                    // 清空之前，自增版本号
-                    long incrementedVersion = redisTemplate.opsForValue().increment(cacheDependencyService.getVersionKey(table));
-                    if (incrementedVersion == 1) {
-                        // 版本号为 1 的时候，表示一开始缓存里面没有任何依赖关系，不需要进行任何处理
-                        return;
+                // 取消该表之前的清理任务（如果有的话）
+                ScheduledFuture<?> previousTask = pendingCleanupTasks.remove(table);
+                if (previousTask != null && !previousTask.isDone()) {
+                    previousTask.cancel(false);
+                }
+
+                // 自增版本号
+                long incrementedVersion = redisTemplate.opsForValue().increment(cacheDependencyService.getVersionKey(table));
+                if (incrementedVersion == 1) {
+                    // 版本号为 1 的时候，表示一开始缓存里面没有任何依赖关系，不需要进行任何处理
+                    continue;
+                }
+                Long previousVersion = incrementedVersion - 1;
+
+                // 为每个新鲜度级别创建任务
+                for (CacheLevelEnum cacheLevel : CacheLevelEnum.getSortedValues()) {
+                    CacheCleanupTask task = new CacheCleanupTask(table, previousVersion, cacheLevel.getLevel());
+                    // 秒级新鲜度（级别为1）立即执行，其他级别延迟执行
+                    if (cacheLevel.getLevel() == CacheLevelEnum.SECONDS.getLevel()) {
+                        immediateTasks.add(task);
+                    } else {
+                        delayedTasks.add(task);
                     }
-                    Long previousVersion = incrementedVersion - 1;
-                    // 获取 ZSET 中的所有成员，按照缓存新鲜度级别分别进行清除
-                    for (CacheLevelEnum cacheLevel : CacheLevelEnum.getSortedValues()) {
-                        doCleanCacheDependencyByFreshness(table, previousVersion, cacheLevel.getLevel());
-                    }
-                });
+                }
             }
+
+            // 立即执行秒级新鲜度的清理任务
+            executeImmediateTasks(immediateTasks);
+
+            // 提交其他级别的任务到调度器，按优先级顺序执行
+            scheduleDelayedTasks(delayedTasks);
         } catch (Exception e) {
             // 报错不抛出，不阻断正常业务执行
             log.warn("清空缓存依赖关系失败：{}，所涉及的表为：{}", e.getMessage(), tableSet, e);
         }
     }
 
-    private void doCleanCacheDependencyByFreshness(String table, Long previousVersion, Integer cacheLevel) {
-        // 获取到当前缓存级别的缓存依赖关系
-        Set<String> sortedMembers = redisTemplate.opsForZSet().rangeByScore(cacheDependencyService.getDependencyKey(table, String.valueOf(previousVersion)), cacheLevel, cacheLevel);
-        redisTemplate.delete(sortedMembers);
-        // FIXME 休眠 5 秒，避免同时清除大量 Key 导致业务操作阻塞，以及缓存雪崩
-        try {
-            Thread.sleep(5000);
-        } catch (InterruptedException ignored) {
-            if (log.isDebugEnabled()) {
-                log.debug("线程 Sleep 失败，被中断");
+    /**
+     * 立即执行秒级新鲜度的清理任务
+     *
+     * @param immediateTasks 立即执行的任务列表
+     */
+    private void executeImmediateTasks(List<CacheCleanupTask> immediateTasks) {
+        for (CacheCleanupTask task : immediateTasks) {
+            try {
+                doCleanCacheDependencyByFreshness(task.table, task.previousVersion, task.cacheLevel);
+            } catch (Exception e) {
+                log.error("立即清理缓存依赖关系失败: table={}, version={}, level={}",
+                        task.table, task.previousVersion, task.cacheLevel, e);
             }
+        }
+    }
+
+    /**
+     * 调度延迟执行的缓存清理任务
+     *
+     * @param delayedTasks 延迟执行的任务队列
+     */
+    private void scheduleDelayedTasks(PriorityQueue<CacheCleanupTask> delayedTasks) {
+        // 初始延迟为0
+        long delay = 0;
+        AtomicInteger submittedTasks = new AtomicInteger(0);
+
+        while (!delayedTasks.isEmpty()) {
+            CacheCleanupTask task = delayedTasks.poll();
+            ScheduledFuture<?> future = scheduledExecutorService.schedule(() -> {
+                try {
+                    doCleanCacheDependencyByFreshness(task.table, task.previousVersion, task.cacheLevel);
+                } catch (Exception e) {
+                    log.error("延迟清理缓存依赖关系失败: table={}, version={}, level={}",
+                            task.table, task.previousVersion, task.cacheLevel, e);
+                }
+            }, delay, TimeUnit.MILLISECONDS);
+
+            pendingCleanupTasks.put(task.table + ":" + task.cacheLevel, future);
+            submittedTasks.incrementAndGet();
+
+            // 增加下一次任务的延迟时间
+            delay += 1000; // 每个任务间隔1000毫秒
+        }
+    }
+
+    private void doCleanCacheDependencyByFreshness(String table, Long previousVersion, Integer cacheLevel) {
+        try {
+            // 获取到当前缓存级别的缓存依赖关系
+            Set<String> sortedMembers = redisTemplate.opsForZSet().rangeByScore(
+                    cacheDependencyService.getDependencyKey(table, String.valueOf(previousVersion)),
+                    cacheLevel,
+                    cacheLevel
+            );
+
+            if (!sortedMembers.isEmpty()) {
+                // 批量删除缓存
+                redisTemplate.delete(sortedMembers);
+                log.debug("已删除表 {} 版本 {} 级别 {} 的 {} 个缓存项", table, previousVersion, cacheLevel, sortedMembers.size());
+            }
+        } catch (Exception e) {
+            log.error("删除缓存依赖关系时发生错误: table={}, version={}, level={}", table, previousVersion, cacheLevel, e);
         }
     }
 
@@ -104,5 +186,19 @@ public class TableAnalysisInterceptor implements Interceptor {
     @Override
     public void setProperties(Properties properties) {
         Interceptor.super.setProperties(properties);
+    }
+
+    /**
+     * 缓存清理任务类，实现了Comparable接口以支持优先级排序
+     */
+    private record CacheCleanupTask(String table,
+                                    Long previousVersion,
+                                    Integer cacheLevel) implements Comparable<CacheCleanupTask> {
+
+        @Override
+        public int compareTo(CacheCleanupTask other) {
+            // 按照缓存级别排序，级别数字越小优先级越高
+            return this.cacheLevel.compareTo(other.cacheLevel);
+        }
     }
 }

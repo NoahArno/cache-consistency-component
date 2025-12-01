@@ -119,6 +119,8 @@ public class TableAnalysisInterceptor implements Interceptor {
                         delayedTasks.add(task);
                     }
                 }
+                // 处理完后，删除上一个版本的依赖关系
+                stringRedisTemplate.delete(cacheDependencyService.getDependencyKey(table, String.valueOf(previousVersion)));
             }
 
             // 立即执行秒级新鲜度的清理任务
@@ -172,8 +174,8 @@ public class TableAnalysisInterceptor implements Interceptor {
             pendingCleanupTasks.put(task.table + ":" + task.cacheLevel, future);
             submittedTasks.incrementAndGet();
 
-            // 增加下一次任务的延迟时间
-            delay += 1000; // 每个任务间隔1000毫秒
+            // 增加下一次任务的延迟时间，每个任务间隔1000毫秒
+            delay += 1000;
         }
     }
 

@@ -72,7 +72,7 @@ public class CacheDependencyService {
      * @return 表依赖关系键
      */
     public String getDependencyKey(String tableName, String version) {
-        return properties.getDependencyKeyPrefix() + tableName + ":" + version;
+        return properties.getDependencyKeyPrefix() + tableName + ":v" + version;
     }
 
 

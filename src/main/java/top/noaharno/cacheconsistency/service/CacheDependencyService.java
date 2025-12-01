@@ -18,12 +18,12 @@ public class CacheDependencyService {
 
     private static final String INIT_VERSION = "1";
 
-    private final StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
 
     private final CacheConsistencyProperties properties;
 
-    public CacheDependencyService(StringRedisTemplate redisTemplate, CacheConsistencyProperties properties) {
-        this.redisTemplate = redisTemplate;
+    public CacheDependencyService(StringRedisTemplate stringRedisTemplate, CacheConsistencyProperties properties) {
+        this.stringRedisTemplate = stringRedisTemplate;
         this.properties = properties;
     }
 
@@ -47,13 +47,13 @@ public class CacheDependencyService {
     private void recordDependency(String tableName, String businessKey, int freshness) {
         // 1. 获取当前 table 最新的版本号
         String versionKey = getVersionKey(tableName);
-        String currentVersion = redisTemplate.opsForValue().get(versionKey);
+        String currentVersion = stringRedisTemplate.opsForValue().get(versionKey);
         if (StringUtils.isBlank(currentVersion)) {
             // 2. 如果 table 没有版本号，则设置初始版本号为 1
-            redisTemplate.opsForValue().set(versionKey, INIT_VERSION);
+            stringRedisTemplate.opsForValue().set(versionKey, INIT_VERSION);
             currentVersion = INIT_VERSION;
         }
-        redisTemplate.opsForZSet().add(getDependencyKey(tableName, currentVersion), businessKey, freshness);
+        stringRedisTemplate.opsForZSet().add(getDependencyKey(tableName, currentVersion), businessKey, freshness);
     }
 
     /**

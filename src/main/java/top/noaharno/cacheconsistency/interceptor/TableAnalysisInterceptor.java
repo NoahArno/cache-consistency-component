@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 public class TableAnalysisInterceptor implements Interceptor {
 
-    private final StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
 
     private final CacheDependencyService cacheDependencyService;
 
@@ -44,10 +44,10 @@ public class TableAnalysisInterceptor implements Interceptor {
      */
     private final Map<String, ScheduledFuture<?>> pendingCleanupTasks = new ConcurrentHashMap<>();
 
-    public TableAnalysisInterceptor(StringRedisTemplate redisTemplate,
+    public TableAnalysisInterceptor(StringRedisTemplate stringRedisTemplate,
                                     CacheDependencyService cacheDependencyService,
                                     CacheConsistencyProperties properties) {
-        this.redisTemplate = redisTemplate;
+        this.stringRedisTemplate = stringRedisTemplate;
         this.cacheDependencyService = cacheDependencyService;
         this.properties = properties;
         // 初始化线程池
@@ -92,7 +92,7 @@ public class TableAnalysisInterceptor implements Interceptor {
                 }
 
                 // 自增版本号
-                long incrementedVersion = redisTemplate.opsForValue().increment(cacheDependencyService.getVersionKey(table));
+                long incrementedVersion = stringRedisTemplate.opsForValue().increment(cacheDependencyService.getVersionKey(table));
                 if (incrementedVersion == 1) {
                     // 版本号为 1 的时候，表示一开始缓存里面没有任何依赖关系，不需要进行任何处理
                     continue;
@@ -102,7 +102,7 @@ public class TableAnalysisInterceptor implements Interceptor {
                 // 为每个新鲜度级别创建任务
                 for (CacheLevelEnum cacheLevel : CacheLevelEnum.getSortedValues()) {
                     // 获取到当前缓存级别的缓存依赖关系
-                    Set<String> sortedMembers = redisTemplate.opsForZSet().rangeByScore(
+                    Set<String> sortedMembers = stringRedisTemplate.opsForZSet().rangeByScore(
                             cacheDependencyService.getDependencyKey(table, String.valueOf(previousVersion)),
                             cacheLevel.getLevel(),
                             cacheLevel.getLevel()
@@ -181,7 +181,7 @@ public class TableAnalysisInterceptor implements Interceptor {
         try {
             if (!sortedMembers.isEmpty()) {
                 // 批量删除缓存
-                redisTemplate.delete(sortedMembers);
+                stringRedisTemplate.delete(sortedMembers);
             }
         } catch (Exception e) {
             log.error("删除缓存依赖关系时发生错误: sortedMembers={}, level={}", sortedMembers, cacheLevel, e);
